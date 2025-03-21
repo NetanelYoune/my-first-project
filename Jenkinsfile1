@@ -1,20 +1,105 @@
 pipeline {
     agent any
+    parameters {
+        string(name: 'DAY', defaultValue: 'Monday', description: 'Enter the day of the class')
+        string(name: 'TIME', defaultValue: '10:00', description: 'Enter the time of the class')
+        string(name: 'SUBJECT', defaultValue: 'Math', description: 'Enter the subject of the class')
+    }
+
     stages {
-        stage('Build') {
+        stage('Validate Parameters') {
             steps {
-                echo 'Building...'
+                script {
+                    // וולידציה של הפרמטרים שהוזנו
+                    if (!params.DAY || !params.TIME || !params.SUBJECT) {
+                        error("Missing required parameters: DAY, TIME, or SUBJECT")
+                    }
+
+                    def validDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+                    if (!validDays.contains(params.DAY)) {
+                        error("Invalid value for DAY: ${params.DAY}. Must be one of: ${validDays.join(', ')}")
+                    }
+
+                    def timeRegex = /\d{2}:\d{2}/
+                    if (!params.TIME.matches(timeRegex)) {
+                        error("Invalid TIME format: ${params.TIME}. Must be in HH:MM format.")
+                    }
+
+                    echo "Parameters validated: Day=${params.DAY}, Time=${params.TIME}, Subject=${params.SUBJECT}"
+                }
             }
         }
-        stage('Test') {
+
+        stage('Checkout') {
             steps {
-                echo 'Testing...'
+                script {
+                    echo 'Checking out the repository...'
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/main']],
+                        userRemoteConfigs: [[
+                            url: 'https://github.com/RINAT143482/Jenkins-Schedule-Manager.git',
+                            credentialsId: 'github-creds'
+                        ]]
+                    ])
+                }
             }
         }
-        stage('Deploy') {
+
+        stage('Validate Files') {
             steps {
-                echo 'Deploying...'
+                script {
+                    def filePath = "${env.WORKSPACE}\\project.ps1"
+                    if (!fileExists(filePath)) {
+                        error("PowerShell script 'project.ps1' not found at path: ${filePath}")
+                    }
+
+                    def outputDir = "${env.WORKSPACE}\\output"
+                    if (!fileExists(outputDir)) {
+                        error("Output directory not found: ${outputDir}")
+                    }
+                }
+            }
+        }
+
+        stage('Execute PowerShell Script') {
+            steps {
+                script {
+                    echo 'Running PowerShell schedule manager script...'
+                    powershell script: """
+                        ${env.WORKSPACE}\\project.ps1 -Day ${params.DAY} -Time ${params.TIME} -Subject ${params.SUBJECT}
+                        Write-Output "======= Schedule HTML Output ======="
+                        Get-Content "${env.WORKSPACE}\\output\\schedule.html"
+                        Write-Output "===================================="
+                    """
+                }
+            }
+        }
+
+        stage('Publish HTML Report') {
+            steps {
+                script {
+                    echo 'Publishing HTML output...'
+                    publishHTML(target: [
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: "${env.WORKSPACE}\\output",
+                        reportFiles: 'schedule.html',
+                        reportName: 'Schedule Report'
+                    ])
+                }
             }
         }
     }
+
+    post {
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed!'
+        }
+    }
 }
+
